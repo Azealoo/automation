@@ -67,11 +67,30 @@ public sealed class GitClient
             throw new InvalidOperationException($"git checkout -b {branch} failed: {result.Stderr}");
     }
 
+    public async Task<bool> LocalBranchExistsAsync(string repoDir, string branch, CancellationToken ct = default)
+    {
+        var result = await RunAsync(repoDir, new[] { "show-ref", "--verify", "--quiet", $"refs/heads/{branch}" }, ct);
+        return result.Success;
+    }
+
+    public async Task<bool> OriginBranchExistsAsync(string repoDir, string branch, CancellationToken ct = default)
+    {
+        var result = await RunAsync(repoDir, new[] { "show-ref", "--verify", "--quiet", $"refs/remotes/origin/{branch}" }, ct);
+        return result.Success;
+    }
+
+    public async Task DeleteLocalBranchAsync(string repoDir, string branch, CancellationToken ct = default)
+    {
+        var result = await RunAsync(repoDir, new[] { "branch", "-D", branch }, ct);
+        if (!result.Success)
+            throw new InvalidOperationException($"git branch -D {branch} failed: {result.Stderr}");
+    }
+
     /// Switch to `branch` tracking `origin/branch`. Uses `checkout -B` which
     /// force-updates the local ref if it already exists; the PR-comment-loop
-    /// caller relies on this so it can resume a branch across runs. Any local
-    /// uncommitted state on the branch is discarded — if that happens, the
-    /// caller should have committed before invoking.
+    /// caller relies on this so it can resume a branch across runs. Tracked
+    /// changes on the branch tip are reset to origin; untracked files in the
+    /// working tree are preserved — call `git clean` separately if needed.
     public async Task<bool> CheckoutTrackingBranchAsync(string repoDir, string branch, CancellationToken ct = default)
     {
         var result = await RunAsync(repoDir, new[] { "checkout", "-B", branch, $"origin/{branch}" }, ct);

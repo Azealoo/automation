@@ -22,15 +22,6 @@ public sealed record IssueRepository(
 public sealed record Label(
     [property: JsonPropertyName("name")] string Name);
 
-public sealed record PullRequest(
-    [property: JsonPropertyName("number")] int Number,
-    [property: JsonPropertyName("title")] string Title,
-    [property: JsonPropertyName("state")] string State,
-    [property: JsonPropertyName("url")] string Url,
-    [property: JsonPropertyName("headRefName")] string HeadRefName,
-    [property: JsonPropertyName("baseRefName")] string BaseRefName,
-    [property: JsonPropertyName("isDraft")] bool IsDraft);
-
 public sealed record IssueComment(
     [property: JsonPropertyName("id")] long Id,
     [property: JsonPropertyName("author")] CommentAuthor? Author,

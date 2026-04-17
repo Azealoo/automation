@@ -53,15 +53,3 @@ public sealed class JsonLineLogger : LoggerBase, IDisposable
 
     public void Dispose() => _writer.Dispose();
 }
-
-public sealed class ConsoleLogger : LoggerBase
-{
-    private readonly object _gate = new();
-    public override void Log(string level, string @event, object? payload = null)
-    {
-        var line = payload is null
-            ? $"[{level}] {@event}"
-            : $"[{level}] {@event} {JsonSerializer.Serialize(payload)}";
-        lock (_gate) Console.WriteLine(line);
-    }
-}
