@@ -43,6 +43,10 @@ public sealed class ClaudeCli : IClaudeCli
             args.Add("--output-format");
             args.Add(invocation.OutputFormat);
         }
+        // `--allowedTools <tools...>` is variadic in the claude CLI and will
+        // otherwise eat the prompt as another tool name. The `--` marker
+        // forces everything after it to be parsed as positional.
+        args.Add("--");
         args.Add(BuildPrompt(invocation));
 
         var psi = new ProcessStartInfo
