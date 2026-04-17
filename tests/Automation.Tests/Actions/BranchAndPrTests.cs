@@ -45,4 +45,22 @@ public class BranchAndPrTests
         Assert.Null(BranchAndPr.ParsePrNumberFromUrl("not a url"));
         Assert.Null(BranchAndPr.ParsePrNumberFromUrl("https://github.com/owner/repo/pull/"));
     }
+
+    [Theory]
+    [InlineData("pull request create failed: GraphQL: Resource not accessible by personal access token (createPullRequest)\n")]
+    [InlineData("GraphQL: Resource not accessible by integration (createPullRequest)")]
+    public void ClassifyPrCreateErrorRecognizesPatScopeFailures(string stderr)
+    {
+        Assert.Equal("pat_scope", BranchAndPr.ClassifyPrCreateError(stderr));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("GraphQL: A pull request already exists for branch X")]
+    [InlineData("fatal: could not read Username for 'https://github.com'")]
+    public void ClassifyPrCreateErrorReturnsNullForUnrelatedFailures(string? stderr)
+    {
+        Assert.Null(BranchAndPr.ClassifyPrCreateError(stderr));
+    }
 }
