@@ -98,6 +98,15 @@ public sealed class PollOrchestrator
         if (verdict.ParsedVerdict == Verdict.NotReady)
         {
             _draft.Write(issue, verdict);
+            // Dry-run must not advance the ledger for either verdict —
+            // otherwise a dry-run run permanently hides the issue from
+            // subsequent live runs (exact bug demonstrated on the
+            // Azealoo/automation-sandbox #2 smoke test).
+            if (_config.DryRun)
+            {
+                _log.Info("loop.issue.dry_run_not_ready", new { repo, issue = issue.Number });
+                return;
+            }
             _ledger.SetIssue(new IssueKey(repo, issue.Number),
                 new IssueState(issue.UpdatedAt, "not_ready", null));
             return;
