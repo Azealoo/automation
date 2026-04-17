@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Automation.Claude;
 using Automation.GitHub;
 using Automation.Logging;
@@ -39,6 +40,32 @@ public sealed class BranchAndPr
             return new BranchAndPrOutcome(true, null, branch);
         }
 
+        var existingPr = await FindOpenPrForBranchAsync(issue.RepoFullName, branch, ct);
+        if (existingPr is not null)
+        {
+            _log.Info("branch_and_pr.pr_already_open", new { repo = issue.RepoFullName, issue = issue.Number, branch, pr = existingPr });
+            return new BranchAndPrOutcome(true, existingPr, branch);
+        }
+
+        if (await _git.LocalBranchExistsAsync(repoCheckoutPath, branch, ct))
+        {
+            _log.Info("branch_and_pr.local_branch_cleanup", new { repo = issue.RepoFullName, issue = issue.Number, branch });
+            await _git.DeleteLocalBranchAsync(repoCheckoutPath, branch, ct);
+        }
+
+        if (await _git.OriginBranchExistsAsync(repoCheckoutPath, branch, ct))
+        {
+            // Previous tick pushed the branch but PR creation failed (e.g. missing PAT
+            // scope). Re-check out from origin and retry only the PR-create step —
+            // re-running the implementer would lose or conflict with committed work
+            // and CLAUDE.md forbids force-push.
+            _log.Info("branch_and_pr.resume_from_origin", new { repo = issue.RepoFullName, issue = issue.Number, branch });
+            if (!await _git.CheckoutTrackingBranchAsync(repoCheckoutPath, branch, ct))
+                throw new InvalidOperationException($"failed to resume origin/{branch}");
+            var resumedPr = await CreateDraftPrAsync(issue, branch, ct);
+            return new BranchAndPrOutcome(resumedPr is not null, resumedPr, branch);
+        }
+
         await _git.CheckoutNewBranchAsync(repoCheckoutPath, branch, ct);
         var implementOk = await _implementer.ImplementAsync(issue, repoCheckoutPath, classifier, imagePaths, ct);
         if (!implementOk)
@@ -55,7 +82,36 @@ public sealed class BranchAndPr
         await _git.PushAsync(repoCheckoutPath, branch, ct);
 
         var prNumber = await CreateDraftPrAsync(issue, branch, ct);
-        return new BranchAndPrOutcome(true, prNumber, branch);
+        return new BranchAndPrOutcome(prNumber is not null, prNumber, branch);
+    }
+
+    private async Task<int?> FindOpenPrForBranchAsync(string repo, string branch, CancellationToken ct)
+    {
+        var result = await _gh.RunAsync(new[]
+        {
+            "pr", "list",
+            "--repo", repo,
+            "--head", branch,
+            "--state", "open",
+            "--json", "number",
+            "--limit", "1",
+        }, ct);
+        if (!result.Success) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(result.Stdout);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                if (el.TryGetProperty("number", out var n) && n.ValueKind == JsonValueKind.Number)
+                    return n.GetInt32();
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private async Task<int?> CreateDraftPrAsync(Issue issue, string branch, CancellationToken ct)

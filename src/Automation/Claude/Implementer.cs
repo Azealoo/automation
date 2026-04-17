@@ -1,4 +1,3 @@
-using Automation.Claude;
 using Automation.GitHub;
 using Automation.Logging;
 

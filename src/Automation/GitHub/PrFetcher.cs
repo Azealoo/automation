@@ -1,33 +1,17 @@
 using System.Text.Json;
+using Automation.Logging;
 
 namespace Automation.GitHub;
 
 public sealed class PrFetcher
 {
     private readonly IGhCli _gh;
+    private readonly ILogger _log;
 
-    public PrFetcher(IGhCli gh)
+    public PrFetcher(IGhCli gh, ILogger log)
     {
         _gh = gh;
-    }
-
-    /// Find the most recent PR we opened for this issue by matching branch prefix.
-    /// We don't rely on GitHub's "linked issue" metadata because gh pr create doesn't
-    /// always set it for fork flows — the branch naming convention is authoritative.
-    public async Task<PullRequest?> FindPrForIssueAsync(string repo, int issueNumber, string branchPrefix, CancellationToken ct = default)
-    {
-        var result = await _gh.RunAsync(new[]
-        {
-            "pr", "list",
-            "--repo", repo,
-            "--state", "open",
-            "--limit", "50",
-            "--json", "number,title,state,url,headRefName,baseRefName,isDraft",
-        }, ct);
-        if (!result.Success) return null;
-
-        var prs = JsonSerializer.Deserialize<List<PullRequest>>(result.Stdout) ?? new List<PullRequest>();
-        return prs.FirstOrDefault(p => p.HeadRefName.StartsWith($"{branchPrefix}-{issueNumber}-", StringComparison.Ordinal));
+        _log = log;
     }
 
     public async Task<IReadOnlyList<IssueComment>> GetIssueCommentsAsync(string repo, int prNumber, CancellationToken ct = default)
@@ -40,7 +24,11 @@ public sealed class PrFetcher
             $"/repos/{repo}/issues/{prNumber}/comments",
             "--paginate",
         }, ct);
-        if (!result.Success) return Array.Empty<IssueComment>();
+        if (!result.Success)
+        {
+            _log.Warn("pr_fetcher.issue_comments_failed", new { repo, pr = prNumber, stderr = result.Stderr });
+            return Array.Empty<IssueComment>();
+        }
 
         using var doc = JsonDocument.Parse(result.Stdout);
         var list = new List<IssueComment>();
@@ -65,7 +53,11 @@ public sealed class PrFetcher
             $"/repos/{repo}/pulls/{prNumber}/comments",
             "--paginate",
         }, ct);
-        if (!result.Success) return Array.Empty<ReviewComment>();
+        if (!result.Success)
+        {
+            _log.Warn("pr_fetcher.review_comments_failed", new { repo, pr = prNumber, stderr = result.Stderr });
+            return Array.Empty<ReviewComment>();
+        }
 
         // The REST API field names differ from GraphQL — map them.
         using var doc = JsonDocument.Parse(result.Stdout);

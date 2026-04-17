@@ -77,7 +77,22 @@ public sealed class PollOrchestrator
             .ToList();
 
         foreach (var issue in toProcess)
-            await HandleIssueAsync(repo, issue, ct);
+        {
+            try
+            {
+                await HandleIssueAsync(repo, issue, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Don't let one bad issue skip the rest of the batch or the
+                // PR-comment loop. Leave the ledger absent so the next tick retries.
+                _log.Error("loop.issue_failed", new { repo, issue = issue.Number, error = ex.Message });
+            }
+        }
 
         // PR comment loop for any PRs we previously opened against this repo.
         await HandleOpenPrsAsync(repo, issues, ct);
