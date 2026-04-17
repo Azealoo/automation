@@ -138,17 +138,16 @@ public sealed class PollOrchestrator
             _log.Info("loop.issue.dry_run_ready", new { repo, issue = issue.Number });
             return;
         }
-        if (outcome.Succeeded && outcome.PrNumber is not null)
+        var ledgerState = LedgerStateForOutcome(outcome, issue.UpdatedAt);
+        if (ledgerState is not null)
+            _ledger.SetIssue(new IssueKey(repo, issue.Number), ledgerState);
+
+        if (outcome.BlockedReason == "pat_scope")
         {
-            _ledger.SetIssue(new IssueKey(repo, issue.Number),
-                new IssueState(issue.UpdatedAt, "ready", outcome.PrNumber));
-        }
-        else if (outcome.BlockedReason == "pat_scope")
-        {
-            // Branch is already pushed — work is preserved. Advance the
-            // ledger so IsIssueAlreadyHandled skips this issue on every
-            // subsequent 15-min tick until the user rotates their PAT
-            // and the issue's updated_at bumps (e.g. via a retry comment).
+            // Branch is already pushed — work is preserved. The ledger advance
+            // above makes IsIssueAlreadyHandled skip this issue on every
+            // subsequent 15-min tick until the user rotates the PAT and the
+            // issue's updated_at bumps (e.g. via a retry comment).
             _log.Error("loop.issue.pr_blocked_pat_scope", new
             {
                 repo,
@@ -158,10 +157,8 @@ public sealed class PollOrchestrator
                               "then comment on the issue to bump updated_at and retrigger. " +
                               "The branch is already pushed — a PR can also be opened manually.",
             });
-            _ledger.SetIssue(new IssueKey(repo, issue.Number),
-                new IssueState(issue.UpdatedAt, "pr_blocked_pat_scope", null));
         }
-        else
+        else if (ledgerState is null)
         {
             _log.Warn("loop.issue.pr_creation_skipped", new
             {
@@ -171,6 +168,19 @@ public sealed class PollOrchestrator
                 succeeded = outcome.Succeeded,
             });
         }
+    }
+
+    /// Pure decision: given a BranchAndPr outcome, what ledger state (if any)
+    /// should we persist for the issue? Returning null means "don't advance"
+    /// — the next tick will retry. `pr_blocked_pat_scope` advances the ledger
+    /// so we stop retrying until the issue's updated_at changes on GitHub.
+    internal static IssueState? LedgerStateForOutcome(BranchAndPrOutcome outcome, string updatedAt)
+    {
+        if (outcome.Succeeded && outcome.PrNumber is not null)
+            return new IssueState(updatedAt, "ready", outcome.PrNumber);
+        if (outcome.BlockedReason == "pat_scope")
+            return new IssueState(updatedAt, "pr_blocked_pat_scope", null);
+        return null;
     }
 
     private async Task HandleOpenPrsAsync(string repo, IReadOnlyList<Issue> currentIssues, CancellationToken ct)
