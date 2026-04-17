@@ -21,9 +21,13 @@ Nothing is auto-posted, auto-merged, or force-pushed. You review every change.
 
 ## Prereqs
 
-- macOS (the jiggler uses CoreGraphics P/Invoke)
-- `.NET 10 SDK` — `brew install dotnet`
-- `gh` CLI — `brew install gh`, then `gh auth login`
+- macOS, or Ubuntu 22.04+ (systemd `--user`). On Linux the jiggler is a
+  no-op and logs `jiggle.unsupported_os` once per tick; set
+  `"jiggle_enabled": false` in `config/config.json` to silence it.
+- `.NET 10 SDK` — macOS: `brew install dotnet`. Ubuntu: `dotnet-sdk-10.0`
+  from the Microsoft apt repo (see Ubuntu section below).
+- `gh` CLI — macOS: `brew install gh`. Ubuntu: from the GitHub apt repo.
+  Then `gh auth login`.
 - `claude` on PATH
 - `git`
 
@@ -39,6 +43,8 @@ gh auth status                # must be clean before live runs
 ## Run
 
 ```bash
+# macOS only. On Ubuntu, `dotnet` from the apt package is already on PATH;
+# the -linux wrapper autodetects DOTNET_ROOT.
 export DOTNET_ROOT="/opt/homebrew/opt/dotnet/libexec"
 
 # One iteration, no writes, no network posts, jiggler off.
@@ -62,6 +68,51 @@ tail -f logs/automation-*.log       # watch the JSON-line audit trail
 The agent runs at login, restarts if it crashes (`KeepAlive=true`), and writes
 stdout/stderr to `logs/launchd.*.log`.
 
+### Install as a systemd user service (Ubuntu)
+
+One-time prereqs (Microsoft + GitHub apt repos):
+
+```bash
+# .NET 10 SDK. Cross-check the commands/hash against Microsoft's docs:
+# https://learn.microsoft.com/en-us/dotnet/core/install/linux-ubuntu
+wget https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb && rm packages-microsoft-prod.deb
+sudo apt update && sudo apt install -y dotnet-sdk-10.0
+
+# gh CLI
+sudo mkdir -p -m 755 /etc/apt/keyrings
+wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+sudo apt update && sudo apt install -y gh
+gh auth login
+
+# Place `claude` at $HOME/.local/bin/claude so it's on the service's PATH.
+```
+
+Then install the unit:
+
+```bash
+./scripts/install-systemd.sh
+journalctl --user -u automation.service -f   # follow stdout/stderr
+./scripts/uninstall-systemd.sh                # to stop
+```
+
+The wrapper autodetects `dotnet` across `/usr/share/dotnet` (apt),
+`/usr/lib/dotnet`, `/snap/dotnet-sdk/current`, `$HOME/.dotnet`, and
+`$PATH`. Override by setting `DOTNET_ROOT` in `.env`.
+
+For the loop to run before first login (truly headless), enable linger once:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+The unit is `Restart=always` + `RestartSec=30`, with `StartLimitBurst=5`
+over 5 minutes so a misconfigured run doesn't thrash journald.
+
 ## Flags
 
 | Flag | Effect |
@@ -84,8 +135,13 @@ src/Automation/
   Loop/{JiggleTimer,PollOrchestrator}.cs
   Prompts/{classifier,implementer,pr_responder}.md
 tests/Automation.Tests/           # xunit, 25+ tests
-launchd/com.user.automation.plist # launchd template (REPO_ROOT interpolated at install)
-scripts/{run-automation,install-launchd,uninstall-launchd,anti-check}.sh
+launchd/com.user.automation.plist # macOS launchd template (REPO_ROOT interpolated at install)
+systemd/automation.service        # Ubuntu systemd user-unit template (ditto)
+scripts/run-automation.sh         # macOS wrapper (launchd)
+scripts/run-automation-linux.sh   # Ubuntu wrapper (systemd --user)
+scripts/{install,uninstall}-launchd.sh
+scripts/{install,uninstall}-systemd.sh
+scripts/anti-check.sh
 config/config.example.json        # template; real file is gitignored
 ```
 

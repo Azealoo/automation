@@ -1,0 +1,27 @@
+# Template. `{{REPO_ROOT}}` is sed-interpolated by scripts/install-systemd.sh.
+# Do not copy this file into ~/.config/systemd/user/ directly.
+[Unit]
+Description=Automation loop (GitHub issue to draft PR)
+Documentation=file://{{REPO_ROOT}}/README.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory={{REPO_ROOT}}
+ExecStart={{REPO_ROOT}}/scripts/run-automation-linux.sh
+Restart=always
+RestartSec=30
+StandardOutput=append:{{REPO_ROOT}}/logs/systemd.out.log
+StandardError=append:{{REPO_ROOT}}/logs/systemd.err.log
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+# Cheap hardening. Does not sandbox `claude`'s Bash tool (intentionally
+# out of scope per CLAUDE.md) but prevents setuid escalation and isolates
+# /tmp from other sessions.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
