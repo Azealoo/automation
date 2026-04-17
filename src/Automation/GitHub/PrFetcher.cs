@@ -32,18 +32,28 @@ public sealed class PrFetcher
 
     public async Task<IReadOnlyList<IssueComment>> GetIssueCommentsAsync(string repo, int prNumber, CancellationToken ct = default)
     {
+        // REST (not `gh pr view --json comments`) because the GraphQL path returns
+        // `id` as a string scalar, which doesn't fit our numeric watermark ledger.
         var result = await _gh.RunAsync(new[]
         {
-            "pr", "view", prNumber.ToString(),
-            "--repo", repo,
-            "--json", "comments",
+            "api",
+            $"/repos/{repo}/issues/{prNumber}/comments",
+            "--paginate",
         }, ct);
         if (!result.Success) return Array.Empty<IssueComment>();
 
         using var doc = JsonDocument.Parse(result.Stdout);
-        if (!doc.RootElement.TryGetProperty("comments", out var comments))
-            return Array.Empty<IssueComment>();
-        return JsonSerializer.Deserialize<List<IssueComment>>(comments.GetRawText()) ?? new List<IssueComment>();
+        var list = new List<IssueComment>();
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+            var id = el.GetProperty("id").GetInt64();
+            var body = el.GetProperty("body").GetString() ?? "";
+            var createdAt = el.GetProperty("created_at").GetString() ?? "";
+            var login = el.TryGetProperty("user", out var u) && u.TryGetProperty("login", out var loginEl)
+                ? loginEl.GetString() ?? "" : "";
+            list.Add(new IssueComment(id, new CommentAuthor(login), body, createdAt));
+        }
+        return list;
     }
 
     public async Task<IReadOnlyList<ReviewComment>> GetReviewCommentsAsync(string repo, int prNumber, CancellationToken ct = default)
