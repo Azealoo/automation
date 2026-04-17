@@ -1,0 +1,26 @@
+# Build output
+bin/
+obj/
+*.user
+*.suo
+
+# Secrets and local config (see CLAUDE.md §Simplicity First)
+.env
+config/config.json
+
+# Runtime artifacts — the loop's audit trail and user-review inbox.
+# These grow over time and are specific to each machine; never commit.
+logs/
+drafts/
+
+# IDE
+.vs/
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Test output
+TestResults/
+coverage.cobertura.xml
