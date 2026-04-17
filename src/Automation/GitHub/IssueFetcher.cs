@@ -18,12 +18,15 @@ public sealed class IssueFetcher
 
     public async Task<IReadOnlyList<Issue>> FetchAssignedIssuesAsync(string repo, int pageSize, CancellationToken ct = default)
     {
+        // Server-side sort via --search (sort:updated-asc) so the oldest
+        // unhandled issue is always in the first page, even when the backlog
+        // exceeds pageSize. Client-side sort alone would silently miss older
+        // issues that fell outside the 30 newest-created default window.
         var args = new[]
         {
             "issue", "list",
             "--repo", repo,
-            "--assignee", "@me",
-            "--state", "open",
+            "--search", "is:open assignee:@me sort:updated-asc",
             "--limit", pageSize.ToString(),
             "--json", IssueFields,
         };
@@ -33,13 +36,10 @@ public sealed class IssueFetcher
 
         var issues = JsonSerializer.Deserialize<List<Issue>>(result.Stdout)
             ?? new List<Issue>();
-        // Process oldest first (ascending updatedAt) so the backlog drains
-        // chronologically instead of always favouring the latest activity.
         return issues
             .Select(i => i.Repository is null
                 ? i with { Repository = new IssueRepository(repo) }
                 : i)
-            .OrderBy(i => i.UpdatedAt, StringComparer.Ordinal)
             .ToList();
     }
 
