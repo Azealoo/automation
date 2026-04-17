@@ -56,8 +56,8 @@ public static class AppConfigLoader
             throw new InvalidDataException($"{path}: watched_repos must contain at least one entry");
         foreach (var repo in config.WatchedRepos)
         {
-            if (!repo.Contains('/'))
-                throw new InvalidDataException($"{path}: repo must be in owner/name form: {repo}");
+            if (!IsSafeRepoName(repo))
+                throw new InvalidDataException($"{path}: repo must be in owner/name form with no path-traversal or control characters: {repo}");
         }
         if (config.PollIntervalSeconds < 60)
             throw new InvalidDataException($"{path}: poll_interval_seconds must be >= 60");
@@ -65,6 +65,29 @@ public static class AppConfigLoader
             throw new InvalidDataException($"{path}: jiggle_interval_seconds must be >= 10");
         if (config.MaxIssuesPerTick < 1)
             throw new InvalidDataException($"{path}: max_issues_per_tick must be >= 1");
+    }
+
+    /// Guard against path-traversal and control characters flowing into
+    /// subprocess arguments and filesystem paths. Keeps `watched_repos`
+    /// strictly in the `owner/name` shape GitHub accepts.
+    internal static bool IsSafeRepoName(string repo)
+    {
+        if (string.IsNullOrWhiteSpace(repo)) return false;
+        if (repo.Contains("..", StringComparison.Ordinal)) return false;
+        if (repo.Contains('\\') || repo.Contains('\0') || repo.Contains('\n') || repo.Contains('\r')) return false;
+        if (repo.StartsWith('/') || repo.StartsWith('-')) return false;
+        var parts = repo.Split('/');
+        if (parts.Length != 2) return false;
+        foreach (var p in parts)
+        {
+            if (p.Length == 0) return false;
+            foreach (var c in p)
+            {
+                var ok = char.IsLetterOrDigit(c) || c is '-' or '_' or '.';
+                if (!ok) return false;
+            }
+        }
+        return true;
     }
 }
 

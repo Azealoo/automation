@@ -46,7 +46,15 @@ public sealed class GhCli : IGhCli
         proc.Start();
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
-        await proc.WaitForExitAsync(ct);
+        try
+        {
+            await proc.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+            throw;
+        }
 
         return new GhResult(proc.ExitCode, stdout.ToString(), stderr.ToString());
     }

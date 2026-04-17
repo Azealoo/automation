@@ -69,13 +69,22 @@ try
     else
     {
         // Run one tick at startup, then every poll_interval_seconds.
-        await orchestrator.RunOnceAsync(cts.Token);
-        using var pollTimer = new Timer(async _ =>
+        // PeriodicTimer keeps ticks serialized and propagates cancellation
+        // cleanly — unlike System.Threading.Timer with an async void callback,
+        // which would silently crash the process on an unhandled exception.
+        try { await orchestrator.RunOnceAsync(cts.Token); }
+        catch (Exception ex) { logger.Error("loop.tick_failed", new { error = ex.Message }); }
+
+        using var periodic = new PeriodicTimer(TimeSpan.FromSeconds(config.PollIntervalSeconds));
+        try
         {
-            try { await orchestrator.RunOnceAsync(cts.Token); }
-            catch (Exception ex) { logger.Error("loop.tick_failed", new { error = ex.Message }); }
-        }, null, TimeSpan.FromSeconds(config.PollIntervalSeconds), TimeSpan.FromSeconds(config.PollIntervalSeconds));
-        try { await Task.Delay(Timeout.Infinite, cts.Token); }
+            while (await periodic.WaitForNextTickAsync(cts.Token).ConfigureAwait(false))
+            {
+                try { await orchestrator.RunOnceAsync(cts.Token); }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { logger.Error("loop.tick_failed", new { error = ex.Message }); }
+            }
+        }
         catch (OperationCanceledException) { /* clean shutdown */ }
     }
 }

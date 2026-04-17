@@ -21,6 +21,16 @@ public class BranchAndPrTests
         Assert.True(result.Length <= 40, $"expected <= 40, got {result.Length}");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("🚀🚀🚀")]   // all non-ASCII: collapses to empty
+    [InlineData("---")]      // all separators: collapses to empty
+    public void SlugReturnsFallbackForBlankOrAllStripped(string title)
+    {
+        Assert.Equal("untitled", BranchAndPr.Slug(title));
+    }
+
     [Fact]
     public void ParsePrNumberFromUrlWorksForGitHubPrUrl()
     {

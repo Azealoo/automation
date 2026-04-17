@@ -24,6 +24,25 @@ public class AppConfigTests
         Assert.EndsWith("automation-checkouts", config.ExpandedWorkdir);
     }
 
+    [Theory]
+    [InlineData("owner/repo", true)]
+    [InlineData("owner-name/repo.name", true)]
+    [InlineData("owner/repo_with_underscores", true)]
+    [InlineData("no-slash", false)]
+    [InlineData("owner/../etc", false)]
+    [InlineData("../etc", false)]
+    [InlineData("owner/repo\nmalicious", false)]
+    [InlineData("owner/repo\0payload", false)]
+    [InlineData("owner//repo", false)]
+    [InlineData("-dash-leading/repo", false)]
+    [InlineData("/owner/repo", false)]
+    [InlineData("", false)]
+    [InlineData("owner/repo/extra", false)]
+    public void IsSafeRepoNameRejectsPathTraversalAndControlChars(string repo, bool expected)
+    {
+        Assert.Equal(expected, AppConfigLoader.IsSafeRepoName(repo));
+    }
+
     [Fact]
     public void LoadRejectsRepoWithoutSlash()
     {

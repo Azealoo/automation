@@ -25,7 +25,8 @@ public sealed record LedgerDocument(
 public sealed class Ledger
 {
     private readonly string _path;
-    private LedgerDocument _doc;
+    private readonly LedgerDocument _doc;
+    private readonly object _gate = new();
     private static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
@@ -38,22 +39,34 @@ public sealed class Ledger
         _doc = Load(path);
     }
 
-    public IssueState? GetIssue(IssueKey key) =>
-        _doc.Issues.TryGetValue(Serialize(key), out var v) ? v : null;
+    public IssueState? GetIssue(IssueKey key)
+    {
+        lock (_gate)
+            return _doc.Issues.TryGetValue(Serialize(key), out var v) ? v : null;
+    }
 
     public void SetIssue(IssueKey key, IssueState state)
     {
-        _doc.Issues[Serialize(key)] = state;
-        Save();
+        lock (_gate)
+        {
+            _doc.Issues[Serialize(key)] = state;
+            Save();
+        }
     }
 
-    public PrState? GetPr(PrKey key) =>
-        _doc.Prs.TryGetValue(Serialize(key), out var v) ? v : null;
+    public PrState? GetPr(PrKey key)
+    {
+        lock (_gate)
+            return _doc.Prs.TryGetValue(Serialize(key), out var v) ? v : null;
+    }
 
     public void SetPr(PrKey key, PrState state)
     {
-        _doc.Prs[Serialize(key)] = state;
-        Save();
+        lock (_gate)
+        {
+            _doc.Prs[Serialize(key)] = state;
+            Save();
+        }
     }
 
     /// Returns true if the issue has already been handled at the given updated_at timestamp.

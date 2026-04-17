@@ -106,6 +106,39 @@ Because this runs unattended:
 - **Structured logs** per loop iteration: which issues were seen, how each
   was classified, what action was taken. These are the audit trail.
 
+## Trust boundary (read this before adding a repo to `watched_repos`)
+
+The implementer and PR-responder stages invoke `claude -p` with write-capable
+tools (`Bash, Read, Write, Edit, Grep, Glob`) inside a repo checkout on your
+laptop. The raw issue body and PR comments are copied directly into the
+prompt. That means **anyone with permission to write an issue or PR comment
+in a watched repo has effective code-execution on your Mac before any human
+review**: a prompt-injection payload can tell `claude` to read `~/.ssh/`, read
+the `GITHUB_TOKEN` from the environment, `curl` it to an attacker, or write
+files anywhere your user account can write.
+
+Mitigations that exist in code — partial, not sufficient alone:
+
+- PRs are draft-only; merges stay manual.
+- The implementer session has a 30-minute timeout.
+- URLs embedded in issue bodies are only downloaded from
+  `githubusercontent.com` / `github.com` hosts (SSRF allowlist).
+- The anti-check script forbids force-push, merge, `--ready`, and
+  default-branch push in the source tree.
+
+Mitigations that do **not** exist and cannot be retrofitted generically:
+
+- No sandbox around `claude -p`. Bash tool access is full user-level.
+- No outbound network allowlist. A `curl` inside the implementer session can
+  reach the open internet.
+- No reliable way to "sanitize" a prompt-injection payload out of an issue
+  body without also destroying legitimate requirements text.
+
+Rule of thumb: **only watch repos whose issue-writer set you already trust
+with shell access to your machine.** For anything else, run the loop with
+`--dry-run` and review the classifier's summary and the implementer prompt
+by hand.
+
 ## When the repo grows
 
 Re-read `demo.jpeg` first, then this file. If the code diverges from the

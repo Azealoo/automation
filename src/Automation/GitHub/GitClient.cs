@@ -67,6 +67,17 @@ public sealed class GitClient
             throw new InvalidOperationException($"git checkout -b {branch} failed: {result.Stderr}");
     }
 
+    /// Switch to `branch` tracking `origin/branch`. Uses `checkout -B` which
+    /// force-updates the local ref if it already exists; the PR-comment-loop
+    /// caller relies on this so it can resume a branch across runs. Any local
+    /// uncommitted state on the branch is discarded — if that happens, the
+    /// caller should have committed before invoking.
+    public async Task<bool> CheckoutTrackingBranchAsync(string repoDir, string branch, CancellationToken ct = default)
+    {
+        var result = await RunAsync(repoDir, new[] { "checkout", "-B", branch, $"origin/{branch}" }, ct);
+        return result.Success;
+    }
+
     public async Task<bool> HasStagedOrUnstagedChangesAsync(string repoDir, CancellationToken ct = default)
     {
         var result = await RunAsync(repoDir, new[] { "status", "--porcelain" }, ct);
@@ -108,7 +119,15 @@ public sealed class GitClient
         proc.Start();
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
-        await proc.WaitForExitAsync(ct);
+        try
+        {
+            await proc.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+            throw;
+        }
         return new GitResult(proc.ExitCode, stdout.ToString(), stderr.ToString());
     }
 }

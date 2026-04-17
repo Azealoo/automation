@@ -61,8 +61,7 @@ public sealed class BranchAndPr
     private async Task<int?> CreateDraftPrAsync(Issue issue, string branch, CancellationToken ct)
     {
         var body = $"Closes #{issue.Number}\n\n" +
-                   "Opened by the personal automation loop. Draft until reviewed.\n" +
-                   "See `/Users/user/Documents/UW/Projects/automation/CLAUDE.md` for scope.";
+                   "Opened by the personal automation loop. Draft until human-reviewed.";
         var result = await _gh.RunAsync(new[]
         {
             "pr", "create",
@@ -89,12 +88,14 @@ public sealed class BranchAndPr
 
     internal static string Slug(string title)
     {
+        if (string.IsNullOrWhiteSpace(title)) return "untitled";
         var chars = title.ToLowerInvariant()
             .Select(c => c < 128 && char.IsLetterOrDigit(c) ? c : '-')
             .ToArray();
         var s = new string(chars);
         while (s.Contains("--")) s = s.Replace("--", "-");
         s = s.Trim('-');
+        if (s.Length == 0) return "untitled";
         return s.Length > 40 ? s[..40].TrimEnd('-') : s;
     }
 }

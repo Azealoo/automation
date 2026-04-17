@@ -90,20 +90,45 @@ public sealed class PollOrchestrator
 
         var attachmentsDir = Path.Join(checkoutDir, ".automation-attachments", $"issue-{issue.Number}");
         Directory.CreateDirectory(attachmentsDir);
-        var imagePaths = await IssueFetcher.DownloadImageAttachmentsAsync(issue, attachmentsDir, _http, ct);
+        var imagePaths = await IssueFetcher.DownloadImageAttachmentsAsync(
+            issue, attachmentsDir, _http, _log, ct);
 
         var verdict = await _classifier.ClassifyAsync(issue, checkoutDir, imagePaths, ct);
 
         if (verdict.ParsedVerdict == Verdict.NotReady)
         {
             _draft.Write(issue, verdict);
-            _ledger.SetIssue(new IssueKey(repo, issue.Number), new IssueState(issue.UpdatedAt, "not_ready", null));
+            _ledger.SetIssue(new IssueKey(repo, issue.Number),
+                new IssueState(issue.UpdatedAt, "not_ready", null));
             return;
         }
 
         var outcome = await _branchAndPr.RunAsync(issue, checkoutDir, verdict, imagePaths, ct);
-        _ledger.SetIssue(new IssueKey(repo, issue.Number),
-            new IssueState(issue.UpdatedAt, "ready", outcome.PrNumber));
+
+        // Only advance the ledger when we actually produced a PR. If the PR
+        // creation failed, leave the entry absent so the next tick retries.
+        // In dry-run we don't record "ready" either — the next real run must
+        // still see this issue fresh.
+        if (_config.DryRun)
+        {
+            _log.Info("loop.issue.dry_run_ready", new { repo, issue = issue.Number });
+            return;
+        }
+        if (outcome.Succeeded && outcome.PrNumber is not null)
+        {
+            _ledger.SetIssue(new IssueKey(repo, issue.Number),
+                new IssueState(issue.UpdatedAt, "ready", outcome.PrNumber));
+        }
+        else
+        {
+            _log.Warn("loop.issue.pr_creation_skipped", new
+            {
+                repo,
+                issue = issue.Number,
+                branch = outcome.Branch,
+                succeeded = outcome.Succeeded,
+            });
+        }
     }
 
     private async Task HandleOpenPrsAsync(string repo, IReadOnlyList<Issue> currentIssues, CancellationToken ct)
@@ -126,8 +151,6 @@ public sealed class PollOrchestrator
 
             var checkoutDir = Path.Join(_config.ExpandedWorkdir, RepoDirName(repo));
             await _git.EnsureCheckoutAsync(repo, checkoutDir, _config.DefaultBranchHint, ct);
-            // Reuse branch from ledger via git fetch + checkout
-            // (branch name is deterministic from issue number).
             var branch = $"{BranchAndPr.BranchPrefix}-{issue.Number}-{BranchAndPr.Slug(issue.Title)}";
 
             if (_config.DryRun)
@@ -138,24 +161,23 @@ public sealed class PollOrchestrator
                     new_issue_comments = newIssue.Count,
                     new_review_comments = newReview.Count,
                 });
+                // Dry-run must NOT advance the PR watermark; otherwise a dry-run
+                // permanently hides these comments from the next real run.
+                continue;
             }
-            else
+
+            var switched = await _git.CheckoutTrackingBranchAsync(checkoutDir, branch, ct);
+            if (!switched)
             {
-                // Switch to the PR branch (tracking origin).
-                // If this fails, skip — we don't force anything.
-                var switchArgs = new[] { "checkout", "-B", branch, $"origin/{branch}" };
-                var proc = await RunGitAsync(checkoutDir, switchArgs, ct);
-                if (proc.ExitCode != 0)
-                {
-                    _log.Warn("pr_comment_loop.checkout_failed", new { repo, pr = prNumber, stderr = proc.Stderr });
-                    continue;
-                }
-                await _prResponder.RespondAsync(checkoutDir, newIssue, newReview, ct);
-                if (await _git.HasStagedOrUnstagedChangesAsync(checkoutDir, ct))
-                {
-                    await _git.CommitAllAsync(checkoutDir, $"auto: address review comments on PR #{prNumber}", ct);
-                    await _git.PushAsync(checkoutDir, branch, ct);
-                }
+                _log.Warn("pr_comment_loop.checkout_failed", new { repo, pr = prNumber, branch });
+                continue;
+            }
+
+            await _prResponder.RespondAsync(checkoutDir, newIssue, newReview, ct);
+            if (await _git.HasStagedOrUnstagedChangesAsync(checkoutDir, ct))
+            {
+                await _git.CommitAllAsync(checkoutDir, $"auto: address review comments on PR #{prNumber}", ct);
+                await _git.PushAsync(checkoutDir, branch, ct);
             }
 
             _ledger.SetPr(prKey, new PrState(
@@ -165,28 +187,4 @@ public sealed class PollOrchestrator
     }
 
     private static string RepoDirName(string repo) => repo.Replace('/', '-');
-
-    private async Task<GitResult> RunGitAsync(string wd, IEnumerable<string> args, CancellationToken ct)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = _config.GitBin,
-            WorkingDirectory = wd,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        using var proc = new System.Diagnostics.Process { StartInfo = psi };
-        var stdout = new System.Text.StringBuilder();
-        var stderr = new System.Text.StringBuilder();
-        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
-        proc.Start();
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
-        await proc.WaitForExitAsync(ct);
-        return new GitResult(proc.ExitCode, stdout.ToString(), stderr.ToString());
-    }
 }
