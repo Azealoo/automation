@@ -33,10 +33,13 @@ public sealed class IssueFetcher
 
         var issues = JsonSerializer.Deserialize<List<Issue>>(result.Stdout)
             ?? new List<Issue>();
+        // Process oldest first (ascending updatedAt) so the backlog drains
+        // chronologically instead of always favouring the latest activity.
         return issues
             .Select(i => i.Repository is null
                 ? i with { Repository = new IssueRepository(repo) }
                 : i)
+            .OrderBy(i => i.UpdatedAt, StringComparer.Ordinal)
             .ToList();
     }
 
