@@ -143,6 +143,24 @@ public sealed class PollOrchestrator
             _ledger.SetIssue(new IssueKey(repo, issue.Number),
                 new IssueState(issue.UpdatedAt, "ready", outcome.PrNumber));
         }
+        else if (outcome.BlockedReason == "pat_scope")
+        {
+            // Branch is already pushed — work is preserved. Advance the
+            // ledger so IsIssueAlreadyHandled skips this issue on every
+            // subsequent 15-min tick until the user rotates their PAT
+            // and the issue's updated_at bumps (e.g. via a retry comment).
+            _log.Error("loop.issue.pr_blocked_pat_scope", new
+            {
+                repo,
+                issue = issue.Number,
+                branch = outcome.Branch,
+                remediation = "Rotate the GitHub PAT (gh auth refresh -s repo,workflow), " +
+                              "then comment on the issue to bump updated_at and retrigger. " +
+                              "The branch is already pushed — a PR can also be opened manually.",
+            });
+            _ledger.SetIssue(new IssueKey(repo, issue.Number),
+                new IssueState(issue.UpdatedAt, "pr_blocked_pat_scope", null));
+        }
         else
         {
             _log.Warn("loop.issue.pr_creation_skipped", new

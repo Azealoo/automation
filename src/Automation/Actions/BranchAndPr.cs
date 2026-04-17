@@ -5,7 +5,13 @@ using Automation.Logging;
 
 namespace Automation.Actions;
 
-public sealed record BranchAndPrOutcome(bool Succeeded, int? PrNumber, string Branch);
+public sealed record BranchAndPrOutcome(
+    bool Succeeded,
+    int? PrNumber,
+    string Branch,
+    string? BlockedReason = null);
+
+internal sealed record PrCreateResult(int? PrNumber, string? BlockedReason);
 
 public sealed class BranchAndPr
 {
@@ -62,8 +68,8 @@ public sealed class BranchAndPr
             _log.Info("branch_and_pr.resume_from_origin", new { repo = issue.RepoFullName, issue = issue.Number, branch });
             if (!await _git.CheckoutTrackingBranchAsync(repoCheckoutPath, branch, ct))
                 throw new InvalidOperationException($"failed to resume origin/{branch}");
-            var resumedPr = await CreateDraftPrAsync(issue, branch, ct);
-            return new BranchAndPrOutcome(resumedPr is not null, resumedPr, branch);
+            var resumed = await CreateDraftPrAsync(issue, branch, ct);
+            return new BranchAndPrOutcome(resumed.PrNumber is not null, resumed.PrNumber, branch, resumed.BlockedReason);
         }
 
         await _git.CheckoutNewBranchAsync(repoCheckoutPath, branch, ct);
@@ -81,8 +87,8 @@ public sealed class BranchAndPr
         await _git.CommitAllAsync(repoCheckoutPath, commitMessage, ct);
         await _git.PushAsync(repoCheckoutPath, branch, ct);
 
-        var prNumber = await CreateDraftPrAsync(issue, branch, ct);
-        return new BranchAndPrOutcome(prNumber is not null, prNumber, branch);
+        var created = await CreateDraftPrAsync(issue, branch, ct);
+        return new BranchAndPrOutcome(created.PrNumber is not null, created.PrNumber, branch, created.BlockedReason);
     }
 
     private async Task<int?> FindOpenPrForBranchAsync(string repo, string branch, CancellationToken ct)
@@ -114,7 +120,7 @@ public sealed class BranchAndPr
         }
     }
 
-    private async Task<int?> CreateDraftPrAsync(Issue issue, string branch, CancellationToken ct)
+    private async Task<PrCreateResult> CreateDraftPrAsync(Issue issue, string branch, CancellationToken ct)
     {
         var body = $"Closes #{issue.Number}\n\n" +
                    "Opened by the personal automation loop. Draft until human-reviewed.";
@@ -129,10 +135,40 @@ public sealed class BranchAndPr
         }, ct);
         if (!result.Success)
         {
-            _log.Error("branch_and_pr.gh_pr_create_failed", new { stderr = result.Stderr });
-            return null;
+            var blocked = ClassifyPrCreateError(result.Stderr);
+            if (blocked == "pat_scope")
+            {
+                // Distinct event so the orchestrator can advance the ledger
+                // and stop the 15-minute retry loop until the user rotates
+                // the PAT and bumps the issue's updated_at.
+                _log.Error("branch_and_pr.pat_scope_error", new
+                {
+                    repo = issue.RepoFullName,
+                    issue = issue.Number,
+                    stderr = result.Stderr,
+                    hint = "gh PAT is missing permission to create pull requests. " +
+                           "Run `gh auth refresh -s repo,workflow` or replace the " +
+                           "fine-grained token with Pull requests: Read and write.",
+                });
+            }
+            else
+            {
+                _log.Error("branch_and_pr.gh_pr_create_failed", new { stderr = result.Stderr });
+            }
+            return new PrCreateResult(null, blocked);
         }
-        return ParsePrNumberFromUrl(result.Stdout.Trim());
+        return new PrCreateResult(ParsePrNumberFromUrl(result.Stdout.Trim()), null);
+    }
+
+    internal static string? ClassifyPrCreateError(string? stderr)
+    {
+        if (string.IsNullOrEmpty(stderr)) return null;
+        // Both PAT and GitHub App tokens surface this message when the token
+        // lacks the write scope required to open a PR.
+        if (stderr.Contains("Resource not accessible by personal access token", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("Resource not accessible by integration", StringComparison.OrdinalIgnoreCase))
+            return "pat_scope";
+        return null;
     }
 
     internal static int? ParsePrNumberFromUrl(string url)
